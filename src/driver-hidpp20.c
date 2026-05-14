@@ -58,6 +58,7 @@
 #define HIDPP_CAP_ADJUSTABLE_REPORT_RATE_8060		(1 << 8)
 #define HIDPP_CAP_BATTERY_VOLTAGE_1001			(1 << 9)
 #define HIDPP_CAP_RGB_EFFECTS_8071			(1 << 10)
+#define HIDPP_CAP_EXTENDED_ADJUSTABLE_DPI_2202		(1 << 11)
 
 #define HIDPP_HIDDEN_FEATURE				(1 << 6)
 
@@ -816,6 +817,39 @@ hidpp20drv_read_resolution_dpi_2201(struct ratbag_device *device)
 }
 
 static int
+hidpp20drv_read_resolution_dpi_2202(struct ratbag_device *device)
+{
+	struct hidpp20drv_data *drv_data = ratbag_get_drv_data(device);
+	struct ratbag *ratbag = device->ratbag;
+	int rc;
+
+	free(drv_data->sensors);
+	drv_data->sensors = NULL;
+	drv_data->num_sensors = 0;
+	rc = hidpp20_extended_adjustable_dpi_get_sensors(drv_data->dev, &drv_data->sensors);
+	if (rc < 0) {
+		log_error(ratbag,
+			  "Error while requesting extended resolution: %s (%d)\n",
+			  strerror(-rc), rc);
+		return rc;
+	} else if (rc == 0) {
+		log_error(ratbag, "Error, no compatible sensors found.\n");
+		return -ENODEV;
+	}
+
+	log_debug(ratbag,
+		  "device is at %d dpi (variable between %d and %d).\n",
+		  drv_data->sensors[0].dpi,
+		  drv_data->sensors[0].dpi_min,
+		  drv_data->sensors[0].dpi_max);
+
+	drv_data->num_sensors = rc;
+	drv_data->num_resolutions = drv_data->num_sensors;
+
+	return 0;
+}
+
+static int
 hidpp20drv_read_report_rate_8060(struct ratbag_device *device)
 {
 	struct hidpp20drv_data *drv_data = ratbag_get_drv_data(device);
@@ -907,8 +941,12 @@ hidpp20drv_read_resolution_dpi(struct ratbag_profile *profile)
 		return 0;
 	}
 
-	if (drv_data->capabilities & HIDPP_CAP_SWITCHABLE_RESOLUTION_2201) {
-		rc = hidpp20drv_read_resolution_dpi_2201(device);
+	if (drv_data->capabilities & HIDPP_CAP_SWITCHABLE_RESOLUTION_2201 ||
+	    drv_data->capabilities & HIDPP_CAP_EXTENDED_ADJUSTABLE_DPI_2202) {
+		if (drv_data->capabilities & HIDPP_CAP_EXTENDED_ADJUSTABLE_DPI_2202)
+			rc = hidpp20drv_read_resolution_dpi_2202(device);
+		else
+			rc = hidpp20drv_read_resolution_dpi_2201(device);
 		if (rc < 0)
 			return rc;
 
@@ -988,7 +1026,8 @@ hidpp20drv_update_resolution_dpi(struct ratbag_resolution *resolution,
 	if (drv_data->capabilities & HIDPP_CAP_ONBOARD_PROFILES_8100)
 		return hidpp20drv_update_resolution_dpi_8100(resolution, dpi_x, dpi_y);
 
-	if (!(drv_data->capabilities & HIDPP_CAP_SWITCHABLE_RESOLUTION_2201))
+	if (!(drv_data->capabilities & HIDPP_CAP_SWITCHABLE_RESOLUTION_2201) &&
+	    !(drv_data->capabilities & HIDPP_CAP_EXTENDED_ADJUSTABLE_DPI_2202))
 		return -ENOTSUP;
 
 	if (!drv_data->num_sensors)
@@ -1001,6 +1040,8 @@ hidpp20drv_update_resolution_dpi(struct ratbag_resolution *resolution,
 		/* validate that the sensor accepts the given DPI */
 		if (dpi < sensor->dpi_min || dpi > sensor->dpi_max)
 			return -EINVAL;
+		if (drv_data->capabilities & HIDPP_CAP_EXTENDED_ADJUSTABLE_DPI_2202)
+			goto out;
 		if (sensor->dpi_steps) {
 			for (i = sensor->dpi_min; i < dpi; i += sensor->dpi_steps) {
 			}
@@ -1016,6 +1057,10 @@ hidpp20drv_update_resolution_dpi(struct ratbag_resolution *resolution,
 				return -EINVAL;
 		}
 	}
+
+out:
+	if (drv_data->capabilities & HIDPP_CAP_EXTENDED_ADJUSTABLE_DPI_2202)
+		return hidpp20_extended_adjustable_dpi_set_sensor_dpi(drv_data->dev, sensor, dpi);
 
 	return hidpp20_adjustable_dpi_set_sensor_dpi(drv_data->dev, sensor, dpi);
 }
@@ -1367,6 +1412,14 @@ hidpp20drv_init_feature(struct ratbag_device *device, uint16_t feature)
 		drv_data->capabilities |= HIDPP_CAP_SWITCHABLE_RESOLUTION_2201;
 		break;
 	}
+	case HIDPP_PAGE_EXTENDED_ADJUSTABLE_DPI: {
+		log_debug(ratbag, "device has extended adjustable dpi\n");
+		rc = hidpp20drv_read_resolution_dpi_2202(device);
+		if (rc < 0)
+			return 0; /* this is not a hard failure */
+		drv_data->capabilities |= HIDPP_CAP_EXTENDED_ADJUSTABLE_DPI_2202;
+		break;
+	}
 	case HIDPP_PAGE_SPECIAL_KEYS_BUTTONS: {
 		log_debug(ratbag, "device has programmable keys/buttons\n");
 		drv_data->capabilities |= HIDPP_CAP_BUTTON_KEY_1b04;
@@ -1457,6 +1510,9 @@ hidpp20drv_init_feature(struct ratbag_device *device, uint16_t feature)
 		break;
 	}
 	case HIDPP_PAGE_ONBOARD_PROFILES: {
+		if (drv_data->capabilities & HIDPP_CAP_EXTENDED_ADJUSTABLE_DPI_2202)
+			break;
+
 		log_debug(ratbag, "device has onboard profiles\n");
 		drv_data->capabilities |= HIDPP_CAP_ONBOARD_PROFILES_8100;
 		break;

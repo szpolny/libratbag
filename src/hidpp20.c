@@ -64,6 +64,7 @@ hidpp20_feature_get_name(uint16_t feature)
 	CASE_RETURN_STRING(HIDPP_PAGE_WIRELESS_DEVICE_STATUS);
 	CASE_RETURN_STRING(HIDPP_PAGE_MOUSE_POINTER_BASIC);
 	CASE_RETURN_STRING(HIDPP_PAGE_ADJUSTABLE_DPI);
+	CASE_RETURN_STRING(HIDPP_PAGE_EXTENDED_ADJUSTABLE_DPI);
 	CASE_RETURN_STRING(HIDPP_PAGE_ADJUSTABLE_REPORT_RATE);
 	CASE_RETURN_STRING(HIDPP_PAGE_COLOR_LED_EFFECTS);
 	CASE_RETURN_STRING(HIDPP_PAGE_RGB_EFFECTS);
@@ -1683,6 +1684,197 @@ int hidpp20_adjustable_dpi_set_sensor_dpi(struct hidpp20_device *device,
 	/* version 0 of the protocol does not echo the parameters */
 	if (returned_parameters != dpi && returned_parameters)
 		return -EIO;
+
+	return 0;
+}
+
+/* -------------------------------------------------------------------------- */
+/* 0x2202: Extended Adjustable DPI                                             */
+/* -------------------------------------------------------------------------- */
+
+#define CMD_EXTENDED_ADJUSTABLE_DPI_GET_DPI_LIST	0x20
+#define CMD_EXTENDED_ADJUSTABLE_DPI_GET_DPI		0x50
+#define CMD_EXTENDED_ADJUSTABLE_DPI_SET_DPI		0x60
+
+static int
+hidpp20_onboard_profiles_set_onboard_mode(struct hidpp20_device *device,
+					  uint8_t onboard_mode);
+
+static int
+hidpp20_extended_adjustable_dpi_get_capabilities(struct hidpp20_device *device,
+							uint8_t reg,
+							struct hidpp20_sensor *sensor)
+{
+	int rc;
+	union hidpp20_message msg = {
+		.msg.report_id = REPORT_ID_SHORT,
+		.msg.device_idx = device->index,
+		.msg.sub_id = reg,
+		.msg.address = 0x10,
+		.msg.parameters[0] = sensor->index,
+	};
+
+	rc = hidpp20_request_command(device, &msg);
+	if (rc)
+		return rc;
+
+	sensor->supports_y = !!(msg.msg.parameters[2] & 0x01);
+	sensor->supports_lod = !!(msg.msg.parameters[2] & 0x02);
+
+	return 0;
+}
+
+static int
+hidpp20_extended_adjustable_dpi_get_dpi_list(struct hidpp20_device *device,
+						    uint8_t reg,
+						    struct hidpp20_sensor *sensor)
+{
+	int rc;
+	unsigned page, i, dpi_index = 0;
+
+	sensor->dpi_min = 0xffff;
+
+	for (page = 0; page < 0x100; page++) {
+		union hidpp20_message msg = {
+			.msg.report_id = REPORT_ID_SHORT,
+			.msg.device_idx = device->index,
+			.msg.sub_id = reg,
+			.msg.address = CMD_EXTENDED_ADJUSTABLE_DPI_GET_DPI_LIST,
+			.msg.parameters[0] = 0,
+			.msg.parameters[1] = sensor->index,
+			.msg.parameters[2] = page,
+		};
+
+		rc = hidpp20_request_command(device, &msg);
+		if (rc)
+			return rc;
+
+		for (i = 3; i < LONG_MESSAGE_LENGTH - 4U; i += 2) {
+			uint16_t value = get_unaligned_be_u16(&msg.msg.parameters[i]);
+
+			if (value == 0)
+				return 0;
+
+			if ((value >> 13) == 0x07) {
+				sensor->dpi_steps = value & 0x1fff;
+			} else {
+				sensor->dpi_min = min(value, sensor->dpi_min);
+				sensor->dpi_max = max(value, sensor->dpi_max);
+				if (dpi_index < ARRAY_LENGTH(sensor->dpi_list) - 1)
+					sensor->dpi_list[dpi_index++] = value;
+			}
+		}
+	}
+
+	return 0;
+}
+
+static int
+hidpp20_extended_adjustable_dpi_get_dpi(struct hidpp20_device *device,
+					       uint8_t reg,
+					       struct hidpp20_sensor *sensor)
+{
+	int rc;
+	union hidpp20_message msg = {
+		.msg.report_id = REPORT_ID_SHORT,
+		.msg.device_idx = device->index,
+		.msg.sub_id = reg,
+		.msg.address = CMD_EXTENDED_ADJUSTABLE_DPI_GET_DPI,
+		.msg.parameters[0] = 0,
+	};
+
+	rc = hidpp20_request_command(device, &msg);
+	if (rc)
+		return rc;
+
+	sensor->dpi = get_unaligned_be_u16(&msg.msg.parameters[1]);
+	if (sensor->dpi == 0)
+		sensor->dpi = get_unaligned_be_u16(&msg.msg.parameters[3]);
+	sensor->default_dpi = get_unaligned_be_u16(&msg.msg.parameters[3]);
+	if (sensor->supports_lod)
+		sensor->lod = msg.msg.parameters[9];
+
+	return 0;
+}
+
+int hidpp20_extended_adjustable_dpi_get_sensors(struct hidpp20_device *device,
+					       struct hidpp20_sensor **sensors_list)
+{
+	uint8_t feature_index;
+	struct hidpp20_sensor *sensor;
+	int rc;
+
+	feature_index = hidpp_root_get_feature_idx(device,
+						   HIDPP_PAGE_EXTENDED_ADJUSTABLE_DPI);
+	if (feature_index == 0)
+		return -ENOTSUP;
+
+	sensor = zalloc(sizeof(struct hidpp20_sensor));
+	sensor->index = 0;
+
+	rc = hidpp20_extended_adjustable_dpi_get_capabilities(device, feature_index, sensor);
+	if (rc)
+		goto err;
+
+	rc = hidpp20_extended_adjustable_dpi_get_dpi_list(device, feature_index, sensor);
+	if (rc)
+		goto err;
+
+	rc = hidpp20_extended_adjustable_dpi_get_dpi(device, feature_index, sensor);
+	if (rc)
+		goto err;
+
+	hidpp_log_raw(&device->base,
+		      "sensor %d: current dpi: %d (default: %d) min: %d max: %d steps: %d\n",
+		      sensor->index,
+		      sensor->dpi,
+		      sensor->default_dpi,
+		      sensor->dpi_min,
+		      sensor->dpi_max,
+		      sensor->dpi_steps);
+
+	*sensors_list = sensor;
+	return 1;
+
+err:
+	free(sensor);
+	return rc > 0 ? -EPROTO : rc;
+}
+
+int hidpp20_extended_adjustable_dpi_set_sensor_dpi(struct hidpp20_device *device,
+						   struct hidpp20_sensor *sensor,
+						   uint16_t dpi)
+{
+	uint8_t feature_index;
+	int rc;
+	union hidpp20_message msg = {
+		.msg.report_id = REPORT_ID_LONG,
+		.msg.device_idx = device->index,
+		.msg.address = CMD_EXTENDED_ADJUSTABLE_DPI_SET_DPI,
+		.msg.parameters[0] = 0,
+	};
+
+	feature_index = hidpp_root_get_feature_idx(device,
+						   HIDPP_PAGE_EXTENDED_ADJUSTABLE_DPI);
+	if (feature_index == 0)
+		return -ENOTSUP;
+
+	if (hidpp_root_get_feature_idx(device, HIDPP_PAGE_ONBOARD_PROFILES)) {
+		rc = hidpp20_onboard_profiles_set_onboard_mode(device, 0x02);
+		if (rc)
+			return rc;
+	}
+
+	msg.msg.sub_id = feature_index;
+	set_unaligned_be_u16(&msg.msg.parameters[1], dpi);
+	if (sensor->supports_y)
+		set_unaligned_be_u16(&msg.msg.parameters[3], dpi);
+	if (sensor->supports_lod)
+		msg.msg.parameters[5] = sensor->lod;
+
+	rc = hidpp20_request_command(device, &msg);
+	if (rc)
+		return rc;
 
 	return 0;
 }
