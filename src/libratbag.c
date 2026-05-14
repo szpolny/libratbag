@@ -391,8 +391,14 @@ static char *
 get_device_name(struct udev_device *device)
 {
 	const char *prop;
+	struct udev_device *parent;
 
 	prop = udev_prop_value(device, "HID_NAME");
+	if (!prop) {
+		parent = udev_device_get_parent_with_subsystem_devtype(device, "hid", NULL);
+		if (parent)
+			prop = udev_prop_value(parent, "HID_NAME");
+	}
 
 	return strdup_safe(prop);
 }
@@ -401,10 +407,16 @@ static inline int
 get_product_id(struct udev_device *device, struct input_id *id)
 {
 	const char *product;
+	struct udev_device *parent;
 	struct input_id ids  = {0};
 	int rc;
 
 	product = udev_prop_value(device, "HID_ID");
+	if (!product) {
+		parent = udev_device_get_parent_with_subsystem_devtype(device, "hid", NULL);
+		if (parent)
+			product = udev_prop_value(parent, "HID_ID");
+	}
 	if (!product)
 		return -1;
 
