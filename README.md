@@ -160,6 +160,11 @@ Device-specific notes
 A number of device-specific notes and observations can be found in our
 wiki: https://github.com/libratbag/libratbag/wiki/Devices
 
+Logitech PRO X 2 / G Pro X Superlight 2 support relies on Logitech HID++
+feature `0x2202` (Extended Adjustable DPI). Devices exposing HID properties
+only on the parent HID node are matched through the parent node, and DPI writes
+switch the mouse to host mode before applying the new resolution.
+
 License
 -------
 
