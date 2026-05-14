@@ -388,10 +388,11 @@ int hidpp20_mousepointer_get_mousepointer_info(struct hidpp20_device *device,
 					       uint8_t *flags);
 
 /* -------------------------------------------------------------------------- */
-/* 0x2201: Adjustable DPI                                                     */
+/* 0x2201: Adjustable DPI, 0x2202: Extended Adjustable DPI                     */
 /* -------------------------------------------------------------------------- */
 
 #define HIDPP_PAGE_ADJUSTABLE_DPI			0x2201
+#define HIDPP_PAGE_EXTENDED_ADJUSTABLE_DPI		0x2202
 
 /**
  * either dpi_steps is not null or the values are stored in the null terminated
@@ -400,6 +401,9 @@ int hidpp20_mousepointer_get_mousepointer_info(struct hidpp20_device *device,
 struct hidpp20_sensor {
 	uint8_t index;
 	uint16_t dpi;
+	uint8_t supports_y;
+	uint8_t supports_lod;
+	uint8_t lod;
 	uint16_t dpi_min;
 	uint16_t dpi_max;
 	uint16_t dpi_steps;
@@ -414,6 +418,8 @@ struct hidpp20_sensor {
  */
 int hidpp20_adjustable_dpi_get_sensors(struct hidpp20_device *device,
 				       struct hidpp20_sensor **sensors_list);
+int hidpp20_extended_adjustable_dpi_get_sensors(struct hidpp20_device *device,
+						struct hidpp20_sensor **sensors_list);
 
 /**
  * set the current dpi of the provided sensor. sensor must have been
@@ -421,6 +427,8 @@ int hidpp20_adjustable_dpi_get_sensors(struct hidpp20_device *device,
  */
 int hidpp20_adjustable_dpi_set_sensor_dpi(struct hidpp20_device *device,
 					  struct hidpp20_sensor *sensor, uint16_t dpi);
+int hidpp20_extended_adjustable_dpi_set_sensor_dpi(struct hidpp20_device *device,
+						   struct hidpp20_sensor *sensor, uint16_t dpi);
 
 /* -------------------------------------------------------------------------- */
 /* 0x8060 - Adjustable Report Rate                                            */
